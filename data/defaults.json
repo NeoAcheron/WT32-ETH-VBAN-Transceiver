@@ -1,0 +1,18 @@
+{
+    "vban_port": 6980,
+    "operation_mode": "defaults",
+    "net_quality": 0,
+    "host_name": "WT32-ETH",
+    "user_name": "Anonymous",
+    "vban_transmitter": {
+        "ip_address_to": "10.0.0.1",
+        "stream_name": "Stream1",
+        "sample_rate": 48000,
+        "channels": 2,
+        "bits_per_sample": 16
+    },
+    "vban_receiver": {
+        "ip_address_from": "10.0.0.1",
+        "stream_name": "Stream1"
+    }
+}
