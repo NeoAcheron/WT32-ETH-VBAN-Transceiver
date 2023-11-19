@@ -20,7 +20,7 @@ typedef enum
     VBAN_NET_QUALITY_MAX
 } vban_net_quality_t;
 
-static int const VBanNetQualitySampleSize[VBAN_BIT_RESOLUTION_MAX] =
+static int const VBanNetQualitySampleSize[VBAN_NET_QUALITY_MAX] =
 {
     64, 32, 128, 192, 256
 };

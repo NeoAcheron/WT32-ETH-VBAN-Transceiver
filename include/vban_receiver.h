@@ -4,39 +4,36 @@
 #ifndef __VBAN_RECEIVER_H__
 #define __VBAN_RECEIVER_H__
 
-#include "vban_common.h"
+#include <WiFiUdp.h>
 
-#include "device_config.h"
-#include "device_status.h"
+#include "vban.h"
+#include "common.h"
 
-class VbanReceiver
+class VbanReceiver : public AudioProcessor
 {
 private:
-    DeviceConfig *device_config;
-    DeviceStatus *device_status;
-    AudioRingBuffer *ring_buffer;
-
     uint32_t nu_frame;
-    const char *stream_name;
+    char stream_name[16];
 
-    AsyncUDP udp;
+    WiFiUDP udp;
+
+    uint8_t packet_buffer[VBAN_PROTOCOL_MAX_SIZE];
+    const VBanHeader* packet_header;
+    const uint8_t* packet_payload;
 
 public:
     VbanReceiver(DeviceConfig *device_config, DeviceStatus *device_status, AudioRingBuffer *ring_buffer);
-
     ~VbanReceiver();
 
-    bool begin();
-    bool stop();
+    TaskDef taskConfig() override;
+    bool init() override;
+    bool handle() override;
 
 private:
+    void handleAudio(size_t payload_size);
 
-    static void handlePacket(void* self, AsyncUDPPacket packet);
-    void handlePacketData(u_int8_t* packet_date, size_t packet_size);
-    void handleAudio(const VBanHeader *header_ptr, uint8_t *payload_ptr, size_t payload_size);
-
-    bool checkHeader(const VBanHeader *header_ptr, size_t packet_size);
-    bool checkAudio(const VBanHeader *header_ptr, size_t packet_size);
+    bool checkHeader(size_t packet_size);
+    bool checkAudio(size_t packet_size);
 };
 
 #endif

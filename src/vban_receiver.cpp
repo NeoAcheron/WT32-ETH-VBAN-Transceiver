@@ -1,50 +1,59 @@
 #include "vban_receiver.h"
 
-VbanReceiver::VbanReceiver(DeviceConfig *device_config, DeviceStatus *device_status, AudioRingBuffer *ring_buffer) : device_config(device_config),
-                                                                                                                     device_status(device_status),
-                                                                                                                     ring_buffer(ring_buffer),
-                                                                                                                     stream_name(device_config->vban_receiver.stream_name.c_str()),
-                                                                                                                     nu_frame(0){};
+VbanReceiver::VbanReceiver(DeviceConfig *device_config, DeviceStatus *device_status, AudioRingBuffer *ring_buffer) : AudioProcessor(device_config, device_status, ring_buffer)
+{
+    nu_frame = 0;
 
-VbanReceiver::~VbanReceiver(){};
+    // Set up the fixed pointers to the incoming packet buffer
+    packet_payload = VBAN_PROTOCOL_PACKET_PAYLOAD_PTR(packet_buffer);
+    packet_header = VBAN_PROTOCOL_PACKET_HEADER_PTR(packet_buffer);
+};
 
-bool VbanReceiver::begin()
-{    
-    udp.onPacket(this->handlePacket, this);
-    return udp.listen(device_status->network.ip, device_config->vban_port);
+VbanReceiver::~VbanReceiver()
+{
+    udp.stop();
+};
+
+TaskDef VbanReceiver::taskConfig()
+{
+    TaskDef task_config = {
+        .pcName = "VBanReceiver",
+        .usStackDepth = 4096,
+        .uxPriority = 1,
+        .xCoreID = 0};
+    return task_config;
 }
 
-bool VbanReceiver::stop()
+bool VbanReceiver::init()
 {
-    udp.close();
-    return false;
+    strncpy(stream_name, device_config->vban_receiver.stream_name.c_str(), 16);
+    bool success = udp.begin(device_config->vban_port);
+
+    return success;
 }
 
-void VbanReceiver::handlePacket(void* self, AsyncUDPPacket packet)
+bool VbanReceiver::handle()
 {
-    ((VbanReceiver* )self)->handlePacketData(packet.data(), packet.length());
-}
+    size_t packet_size = udp.parsePacket();
 
-void VbanReceiver::handlePacketData(uint8_t* packet_data, size_t packet_size)
-{
-    if (!device_status->vban_enable)
+    if (packet_size == 0 || packet_size > VBAN_PROTOCOL_MAX_SIZE)
     {
-        return;
+        return false;
     }
 
-    const VBanHeader *header_ptr = CPP_PACKET_HEADER_PTR(packet_data);
+    udp.read(packet_buffer, packet_size);
 
-    if (!this->checkHeader(header_ptr, packet_size))
-        return;
+    if (!this->checkHeader(packet_size))
+        return false;
 
-    const VBanProtocol protocol = (VBanProtocol)(header_ptr->format_SR & VBAN_PROTOCOL_MASK);
+    const VBanProtocol protocol = (VBanProtocol)(packet_header->format_SR & VBAN_PROTOCOL_MASK);
 
     switch (protocol)
     {
     case VBAN_PROTOCOL_AUDIO:
-        if (this->checkAudio(header_ptr, packet_size))
+        if (this->checkAudio(packet_size))
         {
-            handleAudio(header_ptr, CPP_PACKET_PAYLOAD_PTR(packet_data), CPP_PACKET_PAYLOAD_SIZE(packet_size));
+            handleAudio(VBAN_PROTOCOL_PACKET_PAYLOAD_SIZE(packet_size));
         }
         break;
     case VBAN_PROTOCOL_SERVICE:
@@ -57,11 +66,12 @@ void VbanReceiver::handlePacketData(uint8_t* packet_data, size_t packet_size)
     default:
         break;
     }
+    return true;
 }
 
-bool VbanReceiver::checkHeader(const VBanHeader *header_ptr, size_t packet_size)
+bool VbanReceiver::checkHeader(size_t packet_size)
 {
-    if (header_ptr->vban != VBAN_HEADER_FOURC)
+    if (packet_header->vban != VBAN_HEADER_FOURC)
     {
         return false;
     }
@@ -72,26 +82,26 @@ bool VbanReceiver::checkHeader(const VBanHeader *header_ptr, size_t packet_size)
     }
 
     /** check the reserved bit : it must be 0 */
-    if (header_ptr->format_bit & VBAN_RESERVED_MASK)
+    if (packet_header->format_bit & VBAN_RESERVED_MASK)
     {
         return false;
     }
     return true;
 }
 
-bool VbanReceiver::checkAudio(const VBanHeader *header_ptr, size_t packet_size)
+bool VbanReceiver::checkAudio(size_t packet_size)
 {
-    const VBanCodec codec = (VBanCodec)(header_ptr->format_bit & VBAN_CODEC_MASK);
+    const VBanCodec codec = (VBanCodec)(packet_header->format_bit & VBAN_CODEC_MASK);
     if (codec != VBAN_CODEC_PCM)
     {
         device_status->errors.corrupt = 1;
         return false;
     }
 
-    const VBanBitResolution bit_resolution = (VBanBitResolution)(header_ptr->format_bit & VBAN_BIT_RESOLUTION_MASK);
-    int const sample_rate = header_ptr->format_SR & VBAN_SR_MASK;
-    int const nb_samples = header_ptr->format_nbs + 1;
-    int const nb_channels = header_ptr->format_nbc + 1;
+    const VBanBitResolution bit_resolution = (VBanBitResolution)(packet_header->format_bit & VBAN_BIT_RESOLUTION_MASK);
+    int const sample_rate = packet_header->format_SR & VBAN_SR_MASK;
+    int const nb_samples = packet_header->format_nbs + 1;
+    int const nb_channels = packet_header->format_nbc + 1;
 
     if (bit_resolution >= VBAN_BIT_RESOLUTION_MAX)
     {
@@ -117,44 +127,41 @@ bool VbanReceiver::checkAudio(const VBanHeader *header_ptr, size_t packet_size)
         return false;
     }
 
-    if (strncmp(stream_name, header_ptr->streamname, 16))
+    if (strncmp(stream_name, packet_header->streamname, 16) != 0)
     {
         return false;
     };
 
-    if (header_ptr->nuFrame != 0 && nu_frame >= header_ptr->nuFrame)
+    if (packet_header->nuFrame != 0 && nu_frame >= packet_header->nuFrame)
     {
         device_status->errors.disorder = 1;
         return false;
     }
-    else if ((header_ptr->nuFrame - nu_frame) > 1)
+    else if ((packet_header->nuFrame - nu_frame) > 1)
     {
         device_status->errors.missing = 1;
     }
-    else if (header_ptr->nuFrame != 0)
+    else if (packet_header->nuFrame != 0)
     {
         device_status->errors.disorder = 0;
         device_status->errors.missing = 0;
     }
-    nu_frame = header_ptr->nuFrame;
+    nu_frame = packet_header->nuFrame;
     device_status->errors.corrupt = 0;
 
     return true;
 }
 
-void VbanReceiver::handleAudio(const VBanHeader *header_ptr, uint8_t *payload_ptr, size_t payload_size)
+void VbanReceiver::handleAudio(size_t payload_size)
 {
-    device_status->vban_receiver.sample_rate = VBanSRList[header_ptr->format_SR];
-    device_status->vban_receiver.bits_per_sample = VBanBitResolutionSize[header_ptr->format_bit] * 8;
-    device_status->vban_receiver.channels = header_ptr->format_nbc + 1;
-
     PcmSamples *buffer = ring_buffer->getNextBuffer();
+    const uint32_t sample_rate = VBanSRList[packet_header->format_SR & VBAN_SR_MASK];
+    const uint8_t bits_per_sample = VBanBitResolutionSize[packet_header->format_bit & VBAN_BIT_RESOLUTION_MASK] * 8;
 
     buffer->len = payload_size;
-
-    memcpy(buffer->data, payload_ptr, payload_size);
-    buffer->sample_rate = device_status->vban_receiver.sample_rate;
-    buffer->bits_per_sample = device_status->vban_receiver.bits_per_sample;
+    buffer->sample_rate = sample_rate;
+    buffer->bits_per_sample = bits_per_sample;
+    memcpy(buffer->data, packet_payload, payload_size);
 
     if (ring_buffer->pushRing(buffer))
     {
@@ -165,4 +172,7 @@ void VbanReceiver::handleAudio(const VBanHeader *header_ptr, uint8_t *payload_pt
     {
         device_status->errors.overrun = 1;
     }
+    device_status->vban_receiver.sample_rate = sample_rate;
+    device_status->vban_receiver.bits_per_sample = bits_per_sample;
+    device_status->vban_receiver.channels = packet_header->format_nbc + 1;
 }
