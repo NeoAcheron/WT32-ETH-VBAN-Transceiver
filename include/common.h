@@ -12,7 +12,7 @@
 
 #define CONFIG_RING_BUFFER_COUNT 8
 
-#define VBAN_PROTOCOL_MAX_SIZE      1464
+#define VBAN_PROTOCOL_MAX_SIZE 1464
 /** Return VBanHeader pointer from buffer */
 #define VBAN_PROTOCOL_PACKET_HEADER_PTR(_buffer) ((struct VBanHeader *)_buffer)
 
@@ -55,11 +55,13 @@ private:
   uint32_t ring_buffer_position;
 };
 
-struct TaskDef {
-  const char * const pcName;
+struct TaskDef
+{
+  const char *const pcName;
   uint32_t usStackDepth;
   UBaseType_t uxPriority;
   const BaseType_t xCoreID;
+  uint32_t task_delay_ms;
 };
 
 class AudioProcessor
@@ -69,9 +71,12 @@ public:
   DeviceStatus *device_status;
   AudioRingBuffer *ring_buffer;
 
-private:
+  StaticJsonDocument<1024> debug;
   TaskHandle_t task_handle;
+
+private:
   volatile bool task_running;
+  uint32_t task_delay_ms;
 
 public:
   AudioProcessor(DeviceConfig *device_config, DeviceStatus *device_status, AudioRingBuffer *ring_buffer);
@@ -82,7 +87,7 @@ public:
 
   virtual TaskDef taskConfig() = 0;
 
-  static void loop(void* self);
+  static void loop(void *self);
   int begin();
   bool stop();
 };

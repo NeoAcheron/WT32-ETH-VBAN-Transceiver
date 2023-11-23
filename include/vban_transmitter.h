@@ -22,7 +22,7 @@ private:
 
 public:
     VbanTransmitter(DeviceConfig *device_config, DeviceStatus *device_status, AudioRingBuffer *ring_buffer);
-    ~VbanTransmitter();
+    ~VbanTransmitter() override;
 
     TaskDef taskConfig() override;
     bool init() override;

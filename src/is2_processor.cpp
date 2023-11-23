@@ -96,7 +96,8 @@ TaskDef I2sWriter::taskConfig()
         .pcName = "i2s_writer",
         .usStackDepth = 2048,
         .uxPriority = 0,
-        .xCoreID = 1};
+        .xCoreID = 1,
+        .task_delay_ms = 1};
 
     return task_config;
 }
@@ -123,7 +124,7 @@ bool I2sWriter::handle()
         do
         {
             size_t written_len = 0;
-            esp_err_t err = i2s_write(i2s_port, buffer->data, buffer->len, &written_len, 100);
+            i2s_write(i2s_port, buffer->data, buffer->len, &written_len, 100);
         } while (ring_buffer->popRing(buffer));
     }
 
@@ -142,9 +143,10 @@ TaskDef I2sReader::taskConfig()
 {
     TaskDef task_config = {
         .pcName = "i2s_reader",
-        .usStackDepth = 4096,
+        .usStackDepth = 2048,
         .uxPriority = 0,
-        .xCoreID = 1};
+        .xCoreID = 1,
+        .task_delay_ms = 1};
 
     return task_config;
 }
@@ -170,7 +172,7 @@ bool I2sReader::handle()
 {
     size_t read_len = 0;
 
-    do
+    while (device_status->vban_enable)
     {
         PcmSamples *buffer = ring_buffer->getNextBuffer();
 
@@ -197,6 +199,6 @@ bool I2sReader::handle()
         {
             device_status->errors.overrun = 1;
         }
-    } while (device_status->vban_enable);
+    };
     return true;
 }

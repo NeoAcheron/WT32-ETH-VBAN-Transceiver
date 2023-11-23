@@ -1,18 +1,31 @@
 {
     "vban_port": 6980,
-    "operation_mode": "defaults",
     "net_quality": 0,
-    "host_name": "WT32-ETH",
+    "host_name": "WT32-ETH01",
     "user_name": "Anonymous",
+    "operation_mode": "transmitter",
     "vban_transmitter": {
-        "ip_address_to": "10.0.0.1",
-        "stream_name": "Stream1",
-        "sample_rate": 48000,
-        "channels": 2,
-        "bits_per_sample": 16
+      "ip_address_to": "192.168.50.20",
+      "stream_name": "Stream1",
+      "sample_rate": 48000,
+      "channels": 2,
+      "bits_per_sample": 16
     },
     "vban_receiver": {
-        "ip_address_from": "10.0.0.1",
-        "stream_name": "Stream1"
+      "ip_address_from": "192.168.50.20",
+      "stream_name": "Stream1"
+    },
+    "sigma_connect": {
+      "enable_dsp": false,
+      "sigma_tcpi_server_enable": false,
+      "dsp_auto_power_on_vban": false,
+      "dsp_i2c_sda_pin": 4,
+      "dsp_i2c_scl_pin": 2,
+      "dsp_reset_pin": 33
+    },
+    "denon_connect": {
+      "enable_sync": false,
+      "receiver_ip_address": "192.168.50.250",
+      "receiver_port": 23
     }
-}
+  }

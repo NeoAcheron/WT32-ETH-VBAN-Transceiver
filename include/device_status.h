@@ -6,18 +6,13 @@
 #include <IPAddress.h>
 #include <SPIFFS.h>
 
+#pragma pack (push, 1)
 class DeviceStatus
 {
 public:
-    uint8_t vban_enable;
-    struct
-    {
-        uint8_t active : 1;
-        uint8_t outgoing_stream : 1;
-
-        int32_t last_packet_transmitted_timestamp;
-    } vban_transmitter;
-
+    bool processors_active;
+    bool vban_enable;
+    
     struct
     {
         IPAddress ip;
@@ -28,14 +23,34 @@ public:
 
     struct
     {
-        uint8_t active;
-        uint8_t incoming_stream;
-        uint32_t sample_rate;
-        uint8_t channels;
-        uint8_t bits_per_sample;
+        bool active;
+        bool outgoing_stream;
 
-        int32_t last_packet_received_timestamp;
+        int64_t last_packet_transmitted_timestamp;
+    } vban_transmitter;
+
+
+    struct
+    {
+        bool active;
+        bool incoming_stream;
+        uint8_t channels;
+        uint8_t bits_per_sample;        
+        uint32_t sample_rate;
+        int64_t last_packet_received_timestamp;
     } vban_receiver;
+
+    struct
+    {
+        bool client_connected;
+        bool dac_mute;
+    } sigma_connect;
+
+    struct
+    {
+        bool client_connected;
+        char power_state[16];
+    } denon_connect;
 
     struct
     {
@@ -48,11 +63,10 @@ public:
 
 public:
     DeviceStatus();
-    DeviceStatus(DeviceStatus &config);
-
     ~DeviceStatus();
 
     void get(JsonDocument &json);
 };
+#pragma pack(pop)
 
 #endif

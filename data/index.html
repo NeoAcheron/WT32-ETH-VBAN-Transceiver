@@ -12,8 +12,11 @@
 
     <script src="knockout.js"></script>
     <script src="knockout.mapping.js"></script>
+    <script src="struct.js"></script>
 
     <script>
+        var webSocket;
+
         var viewModel = {};
 
         var page_config = {
@@ -29,12 +32,12 @@
                 { text: "96000 Hz", value: 96000 },
             ],
             channels: [
-                { text: "1", value: 1, disabled: true },
+                { text: "1", value: 1, disable: true },
                 { text: "2", value: 2 },
             ],
             formats: [
                 { text: "PCM 16 bits", value: 16 },
-                { text: "PCM 24 bits", value: 24, disabled: true },
+                { text: "PCM 24 bits", value: 24, disable: true },
             ],
             quality: [
                 { text: "Optimal", value: 0 },
@@ -46,52 +49,109 @@
         };
 
         var device_config = {
-            "vban_port": 6980,
-            "operation_mode": "offline",
-            "net_quality": 0,
-            "host_name": "",
-            "user_name": "",
+            vban_port: 6980,
+            operation_mode: null,
+            net_quality: 0,
+            host_name: "",
+            user_name: "",
 
-            "vban_transmitter": {
-                "ip_address_to": "",
-                "stream_name": "",
-                "sample_rate": 0,
-
-                "channels": 0,
-                "bits_per_sample": 0
+            vban_transmitter: {
+                ip_address_to: "",
+                stream_name: "Stream1",
+                sample_rate: 48000,
+                channels: 0,
+                bits_per_sample: 0
             },
-            "vban_receiver": {
-                "ip_address_from": "",
-                "stream_name": ""
-            }
+            vban_receiver: {
+                ip_address_from: "",
+                stream_name: ""
+            },
+            sigma_connect: {
+                enable_dsp: 0,
+                sigma_tcpi_server_enable: 0,
+                dsp_auto_power_on_vban: 0,
+                dsp_i2c_sda_pin: 0,
+                dsp_i2c_scl_pin: 0,
+                dsp_reset_pin: 0
+            },
+            denon_connect: {
+                enable_sync: false,
+                receiver_ip_address: "",
+                receiver_port: 23,
+            },
         };
+        var errors_t = new struct("DeviceStatus", {
+        });
+
+        var device_status_t = new struct("DeviceStatus", {
+            processors_active: struct.boolean(),
+            vban_enable: struct.boolean(),
+            network: {
+                ip: struct.ipAddress(),
+                mask: struct.uint8(),
+                gateway: struct.ipAddress(),
+                dns: struct.ipAddress(),
+            },
+            vban_transmitter: {
+                active: struct.boolean(),
+                outgoing_stream: struct.boolean(),
+                last_packet_transmitted_timestamp: struct.biguint64()
+            },
+            vban_receiver: {
+                active: struct.boolean(),
+                incoming_stream: struct.boolean(),
+                channels: struct.uint8(),
+                bits_per_sample: struct.uint8(),
+                sample_rate: struct.uint32(),
+                last_packet_received_timestamp: struct.biguint64()
+            },
+            sigma_connect: {
+                client_connected: struct.boolean(),
+                dac_mute: struct.boolean(),
+            },
+            denon_connect: {
+                client_connected: struct.boolean(),
+                power_state: struct.char(16)
+            },
+            errors: struct.map8({
+                overrun: 1,
+                corrupt: 1,
+                disorder: 1,
+                missing: 1,
+                underrun: 1
+            })
+        });
 
         var device_status = {
-            "vban_enable": false,
-            "network": {
-                "ip": "",
-                "mask": 24,
-                "gateway": "",
-                "dns": ""
+            processors_active: false,
+            vban_enable: false,
+            network: {
+                ip: "",
+                mask: 24,
+                gateway: "",
+                dns: ""
             },
-            "vban_transmitter": {
-                "active": false,
-                "outgoing_stream": false,
+            vban_transmitter: {
+                active: true,
+                outgoing_stream: false,
             },
-            "vban_receiver": {
-                "active": false,
-                "incoming_stream": false,
-
-                "sample_rate": 0,
-                "channels": 0,
-                "bits_per_sample": 0,
+            vban_receiver: {
+                active: false,
+                incoming_stream: false,
+                sample_rate: 0,
+                channels: 0,
+                bits_per_sample: 0,
             },
-            "errors": {
-                "overrun": false,
-                "corrupt": false,
-                "disorder": false,
-                "missing": false,
-                "underrun": false
+            errors: {
+                overrun: true,
+                corrupt: false,
+                disorder: false,
+                missing: false,
+                underrun: false
+            },
+            denon_connect: {
+                client_connected: true,
+                power_state: "PWSTANDBY"
             }
         };
 
@@ -100,7 +160,7 @@
         }
 
         function setOffline() {
-            viewModel.device_config.operation_mode("offline");
+            viewModel.device_config.operation_mode(null);
         }
 
         function loadConfig() {
@@ -110,6 +170,9 @@
                     ko.mapping.fromJS({
                         "device_config": parsed,
                     }, viewModel);
+                }).catch(errorMsg => {
+                    console.log(errorMsg);
+                    setOffline();
                 });
         }
 
@@ -123,27 +186,61 @@
                     'Content-Type': 'application/json'
                 },
                 body: body,
-            }).then(response => {
-                setOffline();
-                setTimeout(loadConfig, 5000);
-            });
+            }).then(response => response.json())
+                .then(parsed => {
+                    ko.mapping.fromJS({
+                        "device_config": parsed,
+                    }, viewModel);
+                });
         }
 
-
-        function stopVBAN() {
-            fetch("/stop_vban_receive");
+        function toggleVban() {
+            fetch("/toggle_vban");
         }
 
-        function startVBAN() {
-            fetch("/start_vban_receive");
+        function togglePower() {
+            if (viewModel.device_status.processors_active()) {
+                fetch("/stop");
+            } else {
+                fetch("/start");
+            }
         }
 
         $(document).ready(function (event) {
             viewModel = ko.mapping.fromJS({
-                "device_config": device_config,
-                "device_status": device_status,
-                "page_config": page_config
+                device_config: device_config,
+                device_status: device_status,
+                page_config: page_config,
             });
+
+            viewModel.setOptionDisable = function (option, item) {
+                ko.applyBindingsToNode(option, { disable: item.disable }, item);
+            };
+
+            ko.bindingHandlers.indicator = {
+                init: function (element, valueAccessor, allBindings, viewModel, bindingContext) {
+                    var value = valueAccessor();
+                    var valueUnwrapped = ko.unwrap(value);
+                    if (valueUnwrapped)
+                        $(element).attr("active", true);
+                    else
+                        $(element).attr("active", false);
+                },
+                update: function (element, valueAccessor, allBindings, viewModel, bindingContext) {
+                    var value = valueAccessor();
+                    var valueUnwrapped = ko.unwrap(value);
+                    if (valueUnwrapped)
+                        $(element).attr("active", true);
+                    else
+                        $(element).attr("active", false);
+                }
+            };
+
+            viewModel.indicator = function (option, item) {
+                console.log(option);
+                console.log(item);
+                ko.applyBindingsToNode(option, { disable: item.disable }, item);
+            };
 
             ko.applyBindings(viewModel);
 
@@ -166,9 +263,31 @@
                     });
             }
 
-            loadConfig();
+            function socketInit() {
+                loadConfig();
+                webSocket = new WebSocket('ws://' + window.location.host + ':81/');
+                webSocket.binaryType = 'arraybuffer';
 
-            setTimeout(updateStats, 500);
+                webSocket.onmessage = function (event) {
+                    var dataview = new DataView(event.data);
+                    if (dataview.byteLength > 0) {
+                        var data = device_status_t.decode(dataview, 0, { endian: "LE" });
+                        ko.mapping.fromJS({
+                            "device_status": data,
+                        }, viewModel);
+                    }
+                };
+                webSocket.onclose = function (event) {
+                    setOffline();
+                    setTimeout(socketInit, 1000);
+                };
+                webSocket.onerror = function (event) {
+                    setOffline();
+                    setTimeout(socketInit, 1000);
+                };
+            }
+
+            socketInit();
         });
     </script>
 
@@ -185,94 +304,70 @@
             font-weight: normal;
         }
 
-        /* Customize the label (the container) */
-        .container {
-            display: inline;
-            position: relative;
-            padding-left: 20pt;
-            -webkit-user-select: none;
-            -moz-user-select: none;
-            -ms-user-select: none;
-            user-select: none;
-        }
-
-        .disabled {
-            background-color: #122029 !important;
-            color: #6f8ca0 !important;
-            border: 1px solid #000000;
-        }
-
-        /* Hide the browser's default checkbox */
-        .container input {
-            position: absolute;
-            opacity: 0;
-            cursor: pointer;
-            height: 0;
-            width: 0;
-        }
-
-        /* Create a custom checkbox */
-        .checkmark {
-            margin: auto;
-            top: 0;
-            left: 0;
-            bottom: 0;
-            right: 0;
-
-            border-radius: 4px;
-            align-items: center;
-            height: 8pt;
-            width: 18pt;
-            position: absolute;
-            margin: auto;
-            background-color: #000000;
-        }
-
-        .info-content {
-            color: white;
-            background-color: #000000;
-            border-radius: 4px;
-            padding-left: 5px;
-            padding-right: 5px;
-        }
-
-        .error-content {
-            border: 1px solid #000000;
-            border-radius: 4px;
-            padding-left: 5px;
-            padding-right: 5px;
-        }
-
-        .center {
-            text-align: center;
-            padding-left: 10px;
-            padding-right: 10px;
-        }
-
-        .container:hover input~.checkmark {
-            cursor: pointer;
-        }
-
-        .container:hover input[disabled]~.checkmark {
-            cursor: default !important;
-        }
-
-        .container input:checked~.checkmark {
+        .indicator[active="true"].red,
+        input[type="checkbox"]:checked.red {
             background-color: #d3471f;
         }
 
-        .container input:checked~.checkmark.green {
-            background-color: #24a731 !important;
+        .indicator[active="true"].green,
+        input[type="checkbox"]:checked.green {
+            background-color: #24a731;
         }
 
-        .checkmark:after {
-            content: "";
-            position: absolute;
-            display: none;
+        .indicator[active="true"].blue,
+        input[type="checkbox"]:checked.blue {
+            background-color: #68e6fa;
         }
 
-        .container input:checked~.checkmark:after {
-            display: block;
+        .indicator {
+            display: inline-block;
+            border-radius: 4px;
+            width: 18pt;
+            height: 10pt;
+            margin: auto;
+            padding: 0;
+            background-color: #000000;
+        }
+
+        .container {
+            display: table;
+            margin: 15px;
+            border-collapse: separate;
+            border-spacing: 10px;
+        }
+
+        .container>* {
+            display: table-row;
+        }
+
+        .container>*>* {
+            display: table-cell;
+            vertical-align: middle;
+        }
+
+        header {
+            padding-left: 5px;
+        }
+
+        value>* {
+            display: flex;
+            flex-direction: row;
+            align-content: center;
+            gap: 5px;
+            flex-wrap: nowrap;
+        }
+
+        value {
+            padding: 0 5px;
+            border: 1px solid #000000;
+            border-radius: 4px;
+            color: #FFFFFF;
+            background-color: #000000;
+            white-space: nowrap;
+        }
+
+        value[disabled] {
+            background-color: #122029;
         }
 
         .header {
@@ -287,7 +382,6 @@
             align-items: center;
             align-content: center;
         }
-
 
         .logo {
             display: inline-block;
@@ -314,7 +408,7 @@
 
         .sub-header hr {
             border: none;
-            border-bottom: 1px solid 6f8ca0;
+            border-bottom: 1px solid #6f8ca0;
             margin: 0 6pt;
         }
 
@@ -331,7 +425,7 @@
         }
 
         .sub-header .header-element {
-            margin-top: 7pt; 
+            margin-top: 7pt;
             margin-left: 6pt;
         }
 
@@ -356,8 +450,19 @@
             border-radius: 5px;
         }
 
-        .button[selected] {
+        .button-selected {
             background-color: #68e6fa;
+            border: none;
+            width: 65pt;
+            height: 34pt;
+            padding: 0pt 15pt;
+            text-align: center;
+            text-decoration: none;
+            display: inline-block;
+            font-weight: bold;
+            margin-right: 10pt;
+            cursor: pointer;
+            border-radius: 5px;
         }
 
         .pull-right {
@@ -367,21 +472,46 @@
         }
 
         input[type="text"],
+        input[type="number"],
         select {
             color: white;
             background: #000000;
-            border: none !important;
-            outline: 0px;
-            border-radius: 5px;
+            border: 0px none !important;
+            border-radius: 1px;
+            vertical-align: top;
+            outline: none;
         }
 
-        select[disabled] {
+        select[disabled],
+        input[disabled] {
             font-weight: 100;
             color: white;
             background: #122029;
             -webkit-appearance: none;
             -moz-appearance: none;
         }
+
+        input[type="checkbox"] {
+            display: inline-block;
+            -webkit-appearance: none;
+            -moz-appearance: none;
+            cursor: pointer;
+            border-radius: 4px;
+            opacity: 0;
+            width: 18pt;
+            height: 10pt;
+        }
+
+        input[type="checkbox"]:checked {
+            opacity: 100%;
+        }
+
+        input[type="checkbox"]:after {
+            display: inline-block;
+            content: " ";
+            margin: auto;
+        }
+
 
 
         .ip-address {
@@ -391,249 +521,348 @@
         .stream-name {
             width: 100pt;
         }
+
+        .number-selector {
+            width: 30pt;
+        }
     </style>
 </head>
 
 <body>
-    <div class="header">
-        <span data-bind="hidden: device_config.operation_mode() === 'offline' ">
-            <button class="button" type="button" id="vban_button_off" data-bind="hidden: device_status.vban_enable"
-                onclick="startVBAN()">VBAN is OFF</button>
-            <button class="button" type="button" id="vban_button_on" data-bind="visible: device_status.vban_enable"
-                onclick="stopVBAN()" selected>VBAN is ON</button>
-        </span>
-        <span data-bind="visible: device_config.operation_mode() === 'offline' ">
-            <button class="button" type="button" id="vban_button_off">Device Offline</button>
-        </span>
+    <div id="content" data-bind="visible: device_config.operation_mode()" style="display: none;">
+        <div class="header">
+            <span data-bind="hidden: device_config.operation_mode() === 'offline' ">
+                <button class="button" type="button" data-bind="text: (device_status.processors_active() ? 'Power On' : 'Power Off'), 
+                           class: (device_status.processors_active() ? 'button-selected' : 'button')"
+                    onclick="togglePower()"></button>
 
-        <div class="logo">ESP32 VBAN</div>
-        <div class="header-element" style="margin-left: 4pt;">
-            VB<br>
-            Audio<br>
-            Network
-        </div>
-        <div class="header-element" style="margin-left: 24pt; text-align: center;"
-            data-bind="hidden: device_config.operation_mode() === 'offline' ">
-            UDP Port:<br>
-            <hr>
-            <input style="width: 50px; text-align: center;" type="text" data-bind="value: device_config.vban_port">
-        </div>
-        <div class="header-element"
-            style="margin-left: 24pt; text-align: right; padding-right: 4pt; border-right: 1px solid #6f8ca0;"
-            data-bind="hidden: device_config.operation_mode() === 'offline' ">
-            Device IP<br>
-            Gateway<br>
-            DNS Server
-        </div>
-        <div class="header-element" style="margin-left: 4pt;"
-            data-bind="hidden: device_config.operation_mode() === 'offline' ">
-            <span id="my_ip" data-bind="text: device_status.network.ip">-</span>/<span id="cidr" data-bind="text: device_status.network.mask">-</span><br>
-            <span id="my_gateway" data-bind="text: device_status.network.gateway">-</span><br>
-            <span id="my_dns" data-bind="text: device_status.network.dns">-</span>
-        </div>
-        <div class="header-element pull-right" data-bind="hidden: device_config.operation_mode() === 'offline' ">
-            <div style="margin-right: 15px;">
-                <label>
-                    <input type="radio" name="operation_mode" value="transmitter"
-                        data-bind="checked: device_config.operation_mode">
-                    <span>Transmitter</span>
-                    </input>
-                </label>
-                <br>
+                <button class="button" type="button" data-bind="text: (device_status.vban_enable() ? 'VBAN Active' : 'VBAN Inactive'), 
+                           class: (device_status.vban_enable() ? 'button-selected' : 'button')"
+                    onclick="toggleVban()"></button>
+            </span>
+            <span data-bind="visible: device_config.operation_mode() === 'offline' ">
+                <button class="button" type="button" id="vban_button_off" onclick="location.reload()">Device
+                    Offline</button>
+            </span>
 
-                <label>
-                    <input type="radio" name="operation_mode" value="receiver"
-                        data-bind="checked: device_config.operation_mode">
-                    <span>Receiver</span>
-                    </input>
-                </label>
+            <div class="logo">ESP32 VBAN</div>
+            <div class="header-element" style="margin-left: 4pt;">
+                VB<br>
+                Audio<br>
+                Network
             </div>
-            <div>
-                <button class="button" type="button" onclick="saveConfig()">Save
-                    Config</button>
-                <button class="button" type="button" onclick="firmwareUpdate()">Update Firmware</button>
+            <div class="header-element" style="margin-left: 24pt; text-align: center;"
+                data-bind="hidden: device_config.operation_mode() === 'offline' ">
+                UDP Port:<br>
+                <hr>
+                <input style="width: 50px; text-align: center;" type="text" data-bind="value: device_config.vban_port">
             </div>
-
-        </div>
-    </div>
-    <div data-bind="visible: device_config.operation_mode() === 'transmitter'">
-        <div class="sub-header">
-            <div class="header-element heading">Outgoing Stream:</div>
-        </div>
-        <hr>
-        <table id="transmitter-stats" cellspacing="10px">
-            <tr>
-                <th>Stream Name</th>
-                <th>IP Address To</th>
-                <th>Sample Rate</th>
-                <th>Ch</th>
-                <th>Format</th>
-                <th>Net Quality</th>
-                <th>Errors</th>
-            </tr>
-            <tr>
-                <td class="info-content">
-                    <input type="text" class="stream-name"
-                        data-bind="value: device_config.vban_transmitter.stream_name">
-                </td>
-                <td class="info-content">
-                    <span>
-                        <input type="text" class="ip-address"
-                            data-bind="value: device_config.vban_transmitter.ip_address_to">
-                    </span>
-                    <label class="container" title="Stream Active">
-                        <input type="checkbox" disabled data-bind="checked: device_status.vban_transmitter.active">
-                        <span class="checkmark green"></span>
+            <div class="header-element"
+                style="margin-left: 24pt; text-align: right; padding-right: 4pt; border-right: 1px solid #6f8ca0;"
+                data-bind="hidden: device_config.operation_mode() === 'offline' ">
+                Device IP<br>
+                Gateway<br>
+                DNS Server
+            </div>
+            <div class="header-element" style="margin-left: 4pt;"
+                data-bind="hidden: device_config.operation_mode() === 'offline' ">
+                <span id="my_ip" data-bind="text: device_status.network.ip">-</span>/<span id="cidr"
+                    data-bind="text: device_status.network.mask">-</span><br>
+                <span id="my_gateway" data-bind="text: device_status.network.gateway">-</span><br>
+                <span id="my_dns" data-bind="text: device_status.network.dns">-</span>
+            </div>
+            <div class="header-element pull-right" data-bind="hidden: device_config.operation_mode() === 'offline' ">
+                <div style="margin-right: 15px;">
+                    <label>
+                        <input type="radio" name="operation_mode" value="transmitter"
+                            data-bind="checked: device_config.operation_mode">
+                        <span>Transmitter</span>
+                        </input>
                     </label>
-                </td>
-                </td>
-                <td class="info-content center">
-                    <select data-bind="options: page_config.sample_rates,
-                        optionsText: 'text',
-                        optionsValue: 'value',
-                        value: device_config.vban_transmitter.sample_rate">
-                    </select>
-                </td>
-                <td class="info-content center">
-                    <select data-bind="options: page_config.channels,
-                        optionsText: 'text',
-                        optionsValue: 'value',
-                        value: device_config.vban_transmitter.channels">
-                    </select>
-                </td>
-                <td class="info-content center">
-                    <select data-bind="options: page_config.formats,
-                        optionsText: 'text',
-                        optionsValue: 'value',
-                        value: device_config.vban_transmitter.bits_per_sample">
-                    </select>
-                </td>
-                <td class="info-content center">
-                    <select data-bind="options: page_config.quality,
-                        optionsText: 'text',
-                        optionsValue: 'value',
-                        value: device_config.net_quality">
-                    </select>
-                </td>
-                <td class="error-content">
-                    <div>
-                        <label class="container" title="Buffer Overrun">
-                            <input type="checkbox" id="error_overrun" disabled
-                                data-bind="checked: device_status.errors.overrun">
-                            <span class="checkmark"></span>
-                        </label>
+                    <br>
 
-                        <label class="container" title="Buffer Underrun">
-                            <input type="checkbox" id="error_underrun" disabled
-                                data-bind="checked: device_status.errors.underrun">
-                            <span class="checkmark"></span>
-                        </label>
-                    </div>
-                </td>
-            </tr>
-        </table>
-    </div>
-    <div data-bind="visible: device_config.operation_mode() === 'receiver'">
-        <div class="sub-header">
-            <div class="heading">Incoming Stream:</div>
-            <div class="header-element" data-bind="visible: device_status.vban_receiver.incoming_stream">
-                1 Stream Detected
-            </div>
-            <div class="header-element" data-bind="hidden: device_status.vban_receiver.incoming_stream">
-                -none-
+                    <label>
+                        <input type="radio" name="operation_mode" value="receiver"
+                            data-bind="checked: device_config.operation_mode">
+                        <span>Receiver</span>
+                        </input>
+                    </label>
+                </div>
+                <div>
+                    <button class="button" type="button" onclick="saveConfig()">Save
+                        Config</button>
+                    <button class="button" type="button" onclick="firmwareUpdate()">Update Firmware</button>
+                </div>
+
             </div>
         </div>
-        <hr>
-        <table id="receiver-stats" cellspacing="10px">
-            <tr>
-                <th>Stream Name</th>
-                <th>Source IP Address</th>
-                <th>Sample Rate</th>
-                <th>Ch</th>
-                <th>Format</th>
-                <th>Net Quality</th>
-                <th>Errors</th>
-            </tr>
-            <tr>
-                <td class="info-content" class="stream-name">
-                    <input type="text" class="stream-name" data-bind="value: device_config.vban_receiver.stream_name">
-                </td>
-                <td class="info-content" id="source_ip">
-                    <span><input type="text" class="ip-address"
-                            data-bind="value: device_config.vban_receiver.ip_address_from">
-                    </span>
-    
-                    <label class="container" title="Stream Active">
-                        <input type="checkbox" disabled data-bind="checked: device_status.vban_receiver.active">
-                        <span class="checkmark green"></span>
-                    </label>
-                </td>
-                <td class="info-content center disabled">
-                    <select disabled data-bind="valueAllowUnset: true,
+        <div data-bind="visible: device_config.operation_mode() === 'transmitter'">
+            <div class="sub-header heading">
+                Outgoing Stream:
+            </div>
+            <div class="container">
+                <div>
+                    <header>Stream Name</header>
+                    <header>IP Address To</header>
+                    <header>Sample Rate</header>
+                    <header>Ch</header>
+                    <header>Format</header>
+                    <header>Net Quality</header>
+                    <header>Errors</header>
+                </div>
+
+                <div>
+                    <value>
+                        <input type="text" class="stream-name"
+                            data-bind="value: device_config.vban_transmitter.stream_name">
+                    </value>
+                    <value>
+                        <div>
+                            <input type="text" class="ip-address"
+                                data-bind="value: device_config.vban_transmitter.ip_address_to">
+
+                            <label title="Transmitter Active" class="indicator green"
+                                data-bind="indicator: device_status.vban_transmitter.active">
+                            </label>
+                        </div>
+                    </value>
+                    <value>
+                        <select data-bind="options: page_config.sample_rates,
+                                optionsText: 'text',
+                                optionsValue: 'value',
+                                value: device_config.vban_transmitter.sample_rate,
+                                optionsAfterRender: setOptionDisable">
+                        </select>
+                    </value>
+                    <value>
+                        <select data-bind="options: page_config.channels,
+                                optionsText: 'text',
+                                optionsValue: 'value',
+                                value: device_config.vban_transmitter.channels,
+                                optionsAfterRender: setOptionDisable">
+                        </select>
+                    </value>
+                    <value>
+                        <select data-bind="options: page_config.formats,
+                                optionsText: 'text',
+                                optionsValue: 'value',
+                                value: device_config.vban_transmitter.bits_per_sample,
+                                optionsAfterRender: setOptionDisable">
+                        </select>
+                    </value>
+                    <value>
+                        <select data-bind="options: page_config.quality,
+                                optionsText: 'text',
+                                optionsValue: 'value',
+                                value: device_config.net_quality,
+                                optionsAfterRender: setOptionDisable">
+                        </select>
+                    </value>
+                    <value disabled>
+                        <div>
+                            <label title="Buffer Overrun" class="indicator red"
+                                data-bind="indicator: device_status.errors.overrun">
+                            </label>
+                            <label title="Buffer Underrun" class="indicator red"
+                                data-bind="indicator: device_status.errors.overrun">
+                            </label>
+                        </div>
+                    </value>
+                </div>
+            </div>
+
+        </div>
+        <div data-bind="visible: device_config.operation_mode() === 'receiver'">
+            <div class="sub-header heading">
+                Incoming Stream:&nbsp;
+                <span data-bind="visible: device_status.vban_receiver.incoming_stream">
+                    1 Stream Detected
+                </span>
+                <span data-bind="hidden: device_status.vban_receiver.incoming_stream">
+                    -none-
+                </span>
+            </div>
+
+            <div class="container">
+                <div>
+                    <header>Stream Name</header>
+                    <header>Source IP Address</header>
+                    <header>Sample Rate</header>
+                    <header>Ch</header>
+                    <header>Format</header>
+                    <header>Net Quality</header>
+                    <header>Errors</header>
+                </div>
+
+                <div>
+                    <value>
+                        <input type="text" class="stream-name"
+                            data-bind="value: device_config.vban_receiver.stream_name">
+                    </value>
+                    <value>
+                        <div>
+                            <input type="text" class="ip-address"
+                                data-bind="value: device_config.vban_receiver.ip_address_from">
+
+                            <label title="Stream Active" class="indicator green"
+                                data-bind="indicator: device_status.vban_receiver.active">
+                            </label>
+                        </div>
+                    </value>
+                    <value disabled>
+                        <select disabled data-bind="valueAllowUnset: true,
                             options: page_config.sample_rates,
                             optionsText: 'text',
                             optionsValue: 'value',
                             value: device_status.vban_receiver.sample_rate">
-                    </select>
-                </td>
-                <td class="info-content center disabled">
-                    <select disabled data-bind="valueAllowUnset: true,
+                        </select>
+                    </value>
+                    <value disabled>
+                        <select disabled data-bind="valueAllowUnset: true,
                             options: page_config.channels,
                             optionsText: 'text',
                             optionsValue: 'value',
                             value: device_status.vban_receiver.channels">
-                    </select>
-                </td>
-                <td class="info-content center disabled">
-                    <select disabled data-bind="valueAllowUnset: true,
+                        </select>
+                    </value>
+                    <value disabled>
+                        <select disabled data-bind="valueAllowUnset: true,
                             options: page_config.formats,
                             optionsText: 'text',
                             optionsValue: 'value',
                             value: device_status.vban_receiver.bits_per_sample">
-                    </select>
-                </td>
-                <td class="info-content center">
-                    <select data-bind="options: page_config.quality,
+                        </select>
+                    </value>
+                    <value>
+                        <select data-bind="options: page_config.quality,
                             optionsText: 'text',
                             optionsValue: 'value',
                             value: device_config.net_quality">
-                    </select>
-                </td>
-                <td class="error-content">
+                        </select>
+                    </value>
+
+                    <value disabled>
+                        <div>
+                            <label title="Buffer Overrun" class="indicator red"
+                                data-bind="indicator: device_status.errors.overrun">
+                            </label>
+                            <label title="Data corruption" class="indicator red"
+                                data-bind="indicator: device_status.errors.overrun">
+                            </label>
+                            <label title="Packets out of order" class="indicator red"
+                                data-bind="indicator: device_status.errors.overrun">
+                            </label>
+                            <label title="Packets missed" class="indicator red"
+                                data-bind="indicator: device_status.errors.overrun">
+                            </label>
+                            <label title="Buffer Underrun" class="indicator red"
+                                data-bind="indicator: device_status.errors.overrun">
+                            </label>
+                        </div>
+                    </value>
+                </div>
+            </div>
+
+        </div>
+        <div class="sub-header heading">
+            Peripherals:
+        </div>
+        <div class="container">
+            <div>
+                <header>Denon Connector</header>
+                <header data-bind="visible: device_config.denon_connect.enable_sync()">IP Address</header>
+                <header data-bind="visible: device_config.denon_connect.enable_sync()">Port</header>
+                <header data-bind="visible: device_config.denon_connect.enable_sync()">Current Power State</header>
+            </div>
+            <div>
+                <value>
                     <div>
-                        <label class="container" title="Buffer Overrun">
-                            <input type="checkbox" id="error_overrun" disabled
-                                data-bind="checked: device_status.errors.overrun">
-                            <span class="checkmark"></span>
-                        </label>
-    
-                        <label class="container" title="Data corruption">
-                            <input type="checkbox" id="error_corrupt" disabled
-                                data-bind="checked: device_status.errors.corrupt">
-                            <span class="checkmark"></span>
-                        </label>
-    
-                        <label class="container" title="Packets out of order">
-                            <input type="checkbox" id="error_disorder" disabled
-                                data-bind="checked: device_status.errors.disorder">
-                            <span class="checkmark"></span>
-                        </label>
-    
-                        <label class="container" title="Packets missed">
-                            <input type="checkbox" id="error_missing" disabled
-                                data-bind="checked: device_status.errors.missing">
-                            <span class="checkmark"></span>
-                        </label>
-    
-                        <label class="container" title="Buffer Underrun">
-                            <input type="checkbox" id="error_underrun" disabled
-                                data-bind="checked: device_status.errors.underrun">
-                            <span class="checkmark"></span>
+                        <label title="Enable Power Sync">
+                            <input id="denon-power-sync-button" type="checkbox" class="blue"
+                                data-bind="checked: device_config.denon_connect.enable_sync">
+                            Enable Power Sync
                         </label>
                     </div>
-                </td>
-            </tr>
-        </table>
+                </value>
+                <value data-bind="visible: device_config.denon_connect.enable_sync()">
+                    <div>
+                        <input type="text" class="ip-address" data-bind="value: device_config.denon_connect.receiver_ip_address,
+                                       enable: device_config.denon_connect.enable_sync">
+                        <label title="Connected" class="indicator green"
+                            data-bind="indicator: device_status.denon_connect.client_connected">
+                        </label>
+                    </div>
+                </value>
+                <value data-bind="visible: device_config.denon_connect.enable_sync()">
+                    <div>
+                        <input type="number" class="number-selector" data-bind="value: device_config.denon_connect.receiver_port,
+                                       enable: device_config.denon_connect.enable_sync">
+                    </div>
+                </value>
+                <value disabled data-bind="visible: device_config.denon_connect.enable_sync()">
+                    <div>
+                        <input type="text" disabled class="stream-name"
+                            data-bind="value: device_status.denon_connect.power_state">
+                    </div>
+                </value>
+            </div>
+        </div>
+
+        <div class="container">
+            <div>
+                <header>Sigma Connector</header>
+                <header data-bind="visible: device_config.sigma_connect.enable_dsp()">I2C SDA Pin</header>
+                <header data-bind="visible: device_config.sigma_connect.enable_dsp()">I2C SCL Pin</header>
+                <header data-bind="visible: device_config.sigma_connect.enable_dsp()">DSP Reset Pin</header>
+                <header data-bind="visible: device_config.sigma_connect.enable_dsp()">Sync</header>
+                <header data-bind="visible: device_config.sigma_connect.enable_dsp()"></header>
+            </div>
+            <div>
+                <value>
+                    <div>
+                        <label title="Enable DSP interface">
+                            <input id="denon-power-sync-button" type="checkbox" class="blue"
+                                data-bind="checked: device_config.sigma_connect.enable_dsp">
+                            Enable DSP interface
+                        </label>
+                    </div>
+                </value>
+                <value data-bind="visible: device_config.sigma_connect.enable_dsp()">
+                    <input type="number" class="number-selector"
+                        data-bind="value: device_config.sigma_connect.dsp_i2c_sda_pin">
+                    </input>
+                </value>
+                <value data-bind="visible: device_config.sigma_connect.enable_dsp()">
+                    <input type="number" class="number-selector"
+                        data-bind="value: device_config.sigma_connect.dsp_i2c_scl_pin">
+                    </input>
+                </value>
+                <value data-bind="visible: device_config.sigma_connect.enable_dsp()">
+                    <input type="number" class="number-selector"
+                        data-bind="value: device_config.sigma_connect.dsp_reset_pin">
+                    </input>
+                </value>
+                <value data-bind="visible: device_config.sigma_connect.enable_dsp()">
+                    <label title="Enable DSP interface">
+                        <input type="checkbox" class="blue"
+                            data-bind="checked: device_config.sigma_connect.dsp_auto_power_on_vban">
+                        Enable Power Sync
+                        </input>
+                    </label>
+                </value>
+                <value data-bind="visible: device_config.sigma_connect.enable_dsp()">
+                    <label title="Enable DSP interface">
+                        <input type="checkbox" class="blue"
+                            data-bind="checked: device_config.sigma_connect.sigma_tcpi_server_enable">
+                        Enable SigmaStudio TCP remote programming interface
+                        </input>
+                    </label>
+                </value>
+            </div>
+        </div>
+    </div>
+    <div id="content" data-bind="hidden: device_config.operation_mode()">
+        <h1>Attempting to connect...</h1>
     </div>
 </body>
 

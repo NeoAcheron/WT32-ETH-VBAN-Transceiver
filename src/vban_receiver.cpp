@@ -17,10 +17,11 @@ VbanReceiver::~VbanReceiver()
 TaskDef VbanReceiver::taskConfig()
 {
     TaskDef task_config = {
-        .pcName = "VBanReceiver",
-        .usStackDepth = 4096,
+        .pcName = "vban_receiver",
+        .usStackDepth = 2048,
         .uxPriority = 1,
-        .xCoreID = 0};
+        .xCoreID = 0,
+        .task_delay_ms = 1};
     return task_config;
 }
 
@@ -42,6 +43,11 @@ bool VbanReceiver::handle()
     }
 
     udp.read(packet_buffer, packet_size);
+    
+    if (!device_status->vban_enable)
+    {
+        return false;
+    }
 
     if (!this->checkHeader(packet_size))
         return false;
@@ -115,7 +121,7 @@ bool VbanReceiver::checkAudio(size_t packet_size)
         return false;
     }
 
-    device_status->vban_receiver.last_packet_received_timestamp = millis();
+    device_status->vban_receiver.last_packet_received_timestamp = esp_timer_get_time();
     device_status->vban_receiver.incoming_stream = 1;
 
     size_t sample_size = VBanBitResolutionSize[bit_resolution];

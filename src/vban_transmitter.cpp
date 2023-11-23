@@ -27,10 +27,11 @@ VbanTransmitter::~VbanTransmitter()
 TaskDef VbanTransmitter::taskConfig()
 {
     TaskDef task_config = {
-        .pcName = "VbanTransmitter",
-        .usStackDepth = 4096,
+        .pcName = "vban_transmitter",
+        .usStackDepth = 2048,
         .uxPriority = 1,
-        .xCoreID = 0};
+        .xCoreID = 0,
+        .task_delay_ms = 1};
     return task_config;
 }
 
@@ -56,14 +57,19 @@ bool VbanTransmitter::handle()
         memcpy(packet_payload, buffer->data, buffer->len);
 
         packet_header->format_nbs = (buffer->len / sample_size) - 1;
-        packet_header->nuFrame++;
+        if (packet_header->nuFrame == 0xFFFFFFFF)
+        {
+            packet_header->nuFrame = 0;
+        }
 
         udp.beginPacket(device_config->vban_transmitter.ip_address_to, device_config->vban_port);
         udp.write((const uint8_t *)packet_buffer, buffer->len + VBAN_HEADER_SIZE);
         udp.endPacket();
 
-        device_status->vban_transmitter.last_packet_transmitted_timestamp = millis();
+        device_status->vban_transmitter.last_packet_transmitted_timestamp = esp_timer_get_time();
         device_status->vban_transmitter.active = 1;
+
+        ++packet_header->nuFrame;
     }
     return true;
 }

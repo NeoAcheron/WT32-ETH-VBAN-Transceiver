@@ -21,9 +21,8 @@ typedef enum
 } vban_net_quality_t;
 
 static int const VBanNetQualitySampleSize[VBAN_NET_QUALITY_MAX] =
-{
-    64, 32, 128, 192, 256
-};
+    {
+        64, 32, 128, 192, 256};
 
 class DeviceConfig
 {
@@ -54,19 +53,34 @@ public:
         String stream_name;
     } vban_receiver;
 
+    struct
+    {
+        boolean enable_dsp;
+        boolean sigma_tcpi_server_enable; // Allows SigmAstudio to connect to the DSP remotely for programming
+        boolean dsp_auto_power_on_vban;   // Helps prevents pops
+        uint8_t dsp_i2c_sda_pin;
+        uint8_t dsp_i2c_scl_pin;
+        uint8_t dsp_reset_pin;
+    } sigma_connect;
+    
+    struct
+    {
+        boolean enable_sync;
+        IPAddress receiver_ip_address;
+        uint16_t receiver_port;        
+    } denon_connect;
 
 public:
     DeviceConfig();
-    DeviceConfig(DeviceConfig &config);
-
     ~DeviceConfig();
 
-    void load();
+    bool load();
     void save();
     void reset();
 
     void get(JsonDocument& json);
     void set(JsonDocument& json);
 };
+
 
 #endif

@@ -38,6 +38,7 @@ AudioProcessor::AudioProcessor(DeviceConfig *device_config, DeviceStatus *device
 {
     task_handle = NULL;
     task_running = false;
+    task_delay_ms = 1;
 }
 
 AudioProcessor::~AudioProcessor()
@@ -52,23 +53,20 @@ void AudioProcessor::loop(void *self_ref)
     }
 
     AudioProcessor *self = (AudioProcessor *)self_ref;
-    TaskHandle_t *task_handle_ptr = &(self->task_handle);
 
     if (!self->init())
         return;
 
     self->task_running = true;
+    TickType_t task_delay_ticks = self->task_delay_ms / portTICK_PERIOD_MS;
 
-    u_int32_t notification;
     while (true)
     {
-        if (self->device_status->vban_enable)
-        {
-            self->handle();
+        self->handle();
+        if(task_delay_ticks){
+            vTaskDelay(task_delay_ticks);
         }
-        vTaskDelay(1 / portTICK_PERIOD_MS);
     }
-    self->task_running = false;
 }
 
 int AudioProcessor::begin()
@@ -77,6 +75,8 @@ int AudioProcessor::begin()
         return pdFREERTOS_ERRNO_EINPROGRESS;
 
     TaskDef task_def = this->taskConfig();
+    task_delay_ms = task_def.task_delay_ms;
+
     int result = xTaskCreatePinnedToCore(
         this->loop,            /* Function to implement the task */
         task_def.pcName,       /* Name of the task */
@@ -91,6 +91,11 @@ int AudioProcessor::begin()
 
 bool AudioProcessor::stop()
 {
-    vTaskDelete(this->task_handle);
+    if (this->task_handle != NULL)
+    {
+        vTaskDelete(this->task_handle);
+        this->task_handle = NULL;
+        this->task_running = false;
+    }
     return true;
 }
